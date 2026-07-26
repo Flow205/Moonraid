@@ -47,7 +47,7 @@ def main() -> None:
     app.add_handler(CommandHandler("task", cmd_task))
     app.add_handler(CommandHandler(["points", "mypoints"], cmd_points))
     app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
-    app.add_handler(CommandHandler("add", cmd_add))          # ← new
+    app.add_handler(CommandHandler("add", cmd_add))
     app.add_handler(CommandHandler("find", cmd_find))
     app.add_handler(CommandHandler("done", cmd_done))
     app.add_handler(CommandHandler("help", cmd_help))
