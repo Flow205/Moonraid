@@ -8,9 +8,9 @@ from telegram.ext import (
     filters,
 )
 
-from botconfig import TELEGRAM_BOT_TOKEN
-from bot.database import init_db
-from bot.handlers import (
+from config import TELEGRAM_BOT_TOKEN
+from database import init_db
+from handlers import (
     cmd_addraid,
     cmd_done,
     cmd_find,
@@ -22,7 +22,6 @@ from bot.handlers import (
     cmd_task,
     handle_message,
 )
-
 logging.basicConfig(
     format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
     level=logging.INFO,
