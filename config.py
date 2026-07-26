@@ -7,7 +7,7 @@ TWITTER_BEARER_TOKEN: str = os.environ.get("TWITTER_BEARER_TOKEN", "")
 GROK_MODEL: str = "llama-3.3-70b-versatile"
 GROK_BASE_URL: str = "https://api.groq.com/openai/v1"
 
-DB_PATH: str = "bot/community.db"
+DB_PATH: str = "community.db"
 
 # Points awarded per action
 POINTS_REGISTER: int = 10
