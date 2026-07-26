@@ -8,7 +8,7 @@ from telegram.ext import (
     filters,
 )
 
-from bot.config import TELEGRAM_BOT_TOKEN
+from botconfig import TELEGRAM_BOT_TOKEN
 from bot.database import init_db
 from bot.handlers import (
     cmd_addraid,
