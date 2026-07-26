@@ -1,6 +1,6 @@
 import sqlite3
 from typing import Optional
-from bot.config import DB_PATH
+from config import DB_PATH
 
 
 def get_conn() -> sqlite3.Connection:
@@ -391,7 +391,7 @@ def get_recent_posts(limit: int = 10) -> list:
         """SELECT t.description, t.points_earned, t.created_at,
                   u.first_name, u.username
            FROM tasks t
-           JOIN users u ON u.telegram_id = t.telegram_id
+           JOIN users u ON t.telegram_id = u.telegram_id
            ORDER BY t.created_at DESC LIMIT ?""",
         (limit,),
     ).fetchall()
@@ -403,7 +403,8 @@ def get_leaderboard(limit: int = 10) -> list:
     conn = get_conn()
     rows = conn.execute(
         """SELECT first_name, username, x_username, points
-           FROM users ORDER BY points DESC LIMIT ?""",
+           FROM users
+           ORDER BY points DESC LIMIT ?""",
         (limit,),
     ).fetchall()
     conn.close()
