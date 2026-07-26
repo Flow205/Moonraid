@@ -54,7 +54,6 @@ def main() -> None:
 
     # Catch-all for normal messages → Grok AI
     app.add_handler(
-        app.add_handler(
         MessageHandler(filters.TEXT & \~filters.COMMAND, handle_message)
     )
 
