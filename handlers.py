@@ -10,7 +10,6 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 
 import database as db
-from database import get_recent_posts, set_last_raid_id
 from config import (
     GROK_ENABLED,
     LEADERBOARD_SIZE,
@@ -20,27 +19,38 @@ from config import (
     POINTS_TASK,
 )
 from grok import ask_grok, generate_raid_reply
+from twitter import get_user_info, get_latest_tweets
 
 
 def _time_ago(created_at_str: str) -> str:
-    created = datetime.fromisoformat(created_at_str)
-    diff = datetime.utcnow() - created
-    minutes = int(diff.total_seconds() / 60)
-    if minutes < 60:
-        return f"{minutes}min ago"
-    hours = minutes // 60
-    if hours < 24:
-        return f"{hours}h ago"
-    return f"{hours // 24}d ago"
+    try:
+        created = datetime.fromisoformat(created_at_str.replace("Z", "+00:00"))
+        diff = datetime.now(timezone.utc) - created
+        minutes = int(diff.total_seconds() / 60)
+        if minutes < 60:
+            return f"{minutes}min ago"
+        hours = minutes // 60
+        if hours < 24:
+            return f"{hours}h ago"
+        return f"{hours // 24}d ago"
+    except Exception:
+        return "recently"
 
 
-def _extract_tweet_id(url: str) -> str | None:
-    match = re.search(r"/status/(\d+)", url)
-    return match.group(1) if match else None
+def _extract_username(text: str) -> str | None:
+    """Extract username from @user or https://x.com/user"""
+    text = text.strip()
+    if text.startswith("@"):
+        return text.lstrip("@")
+    match = re.search(r"(?:x\.com|twitter\.com)/([A-Za-z0-9_]+)", text)
+    if match:
+        return match.group(1)
+    if re.match(r"^[A-Za-z0-9_]+$", text):
+        return text
+    return None
 
 
 def _display_name(row) -> str:
-    """Return a readable name for a leaderboard row."""
     if row["username"]:
         return f"@{row['username']}"
     return row["first_name"] or "Unknown"
@@ -201,50 +211,70 @@ async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 # ---------------------------------------------------------------------------
-# /addraid  (add a raid target)
+# /add  (add X account to track)
 # ---------------------------------------------------------------------------
 
-async def cmd_addraid(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def cmd_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if user is None:
         return
+
     if not db.get_user(user.id):
         await update.message.reply_text("Please /start first to register.")
         return
 
-    # Usage: /addraid <tweet_url> @account <followers> <tweet content...>
-    if not context.args or len(context.args) < 4:
+    if not context.args:
         await update.message.reply_text(
-            "Usage: /addraid &lt;tweet_url&gt; @account &lt;followers&gt; &lt;tweet content...&gt;\n\n"
-            "Example:\n"
-            "<code>/addraid https://x.com/CookerFlips/status/207... @CookerFlips 135k I don't care if you're bearish…</code>",
+            "Usage: /add &lt;username or profile link&gt;\n\n"
+            "Examples:\n"
+            "<code>/add OnchainDataNerd</code>\n"
+            "<code>/add @OnchainDataNerd</code>\n"
+            "<code>/add https://x.com/OnchainDataNerd</code>",
             parse_mode=ParseMode.HTML,
         )
         return
 
-    tweet_url = context.args[0]
-    account = context.args[1].lstrip("@")
-    followers = context.args[2]
-    tweet_content = " ".join(context.args[3:])
+    raw = " ".join(context.args)
+    username = _extract_username(raw)
+    if not username:
+        await update.message.reply_text("❌ Could not understand that username or link.")
+        return
 
-    tweet_id = _extract_tweet_id(tweet_url)
-    if not tweet_id:
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+    info = await get_user_info(username)
+    if not info:
         await update.message.reply_text(
-            "❌ Couldn't extract tweet ID from that URL. Make sure it's a valid X/Twitter link."
+            f"❌ Could not find @{username} on X.\n"
+            "Make sure the username is correct and that TWITTER_BEARER_TOKEN is set."
         )
         return
 
-    db.add_raid(tweet_url, tweet_id, account, followers, tweet_content, user.id)
+    followers = info["followers_count"]
+    followers_str = f"{followers:,}" if followers >= 1000 else str(followers)
+
+    success = db.add_monitored_account(
+        username=info["username"],
+        followers_count=followers_str,
+        added_by=user.id,
+    )
+
+    if not success:
+        await update.message.reply_text(f"ℹ️ @{info['username']} is already being tracked.")
+        return
+
+    # Store the twitter user id
+    db.update_twitter_user_id(info["username"], info["id"])
+
     await update.message.reply_text(
-        f"✅ Raid added!\n\n"
-        f"🎯 Target: @{account} ({followers} followers)\n"
-        f"📝 {tweet_content}\n\n"
-        f"Members can now use /find to get this raid.",
+        f"✅ added <b>@{info['username']}</b>\n"
+        f"now tracking · {followers_str} followers",
+        parse_mode=ParseMode.HTML,
     )
 
 
 # ---------------------------------------------------------------------------
-# /find  (show current raid with AI reply suggestion)
+# /find  (show latest post from tracked accounts)
 # ---------------------------------------------------------------------------
 
 async def cmd_find(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -256,32 +286,71 @@ async def cmd_find(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Please /start first to register.")
         return
 
-    raid = db.get_available_raid(user.id)
-    if not raid:
+    accounts = db.get_monitored_accounts()
+    if not accounts:
         await update.message.reply_text(
-            "✅ No tasks available right now.\nCheck back later for new raids!"
+            "No accounts are being tracked yet.\n"
+            "Use /add @username to start tracking influencers."
         )
         return
 
-    # Advance cursor so next /find shows a different raid
-    set_last_raid_id(user.id, raid["id"])
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+    # Look for a fresh tweet the user hasn't seen yet
+    chosen = None
+    for acc in accounts:
+        if not acc["twitter_user_id"]:
+            continue
+
+        tweets = await get_latest_tweets(acc["twitter_user_id"], max_results=5)
+        for tw in tweets:
+            tweet_id = tw["id"]
+            if db.is_tweet_seen(tweet_id, user.id):
+                continue
+
+            # Found a new one
+            tweet_url = f"https://x.com/{acc['username']}/status/{tweet_id}"
+            db.mark_tweet_seen(
+                tweet_id=tweet_id,
+                tweet_content=tw["text"],
+                tweet_url=tweet_url,
+                account_username=acc["username"],
+                followers_count=acc["followers_count"],
+                telegram_id=user.id,
+            )
+            chosen = {
+                "tweet_id": tweet_id,
+                "text": tw["text"],
+                "url": tweet_url,
+                "username": acc["username"],
+                "followers": acc["followers_count"],
+                "created_at": tw.get("created_at", ""),
+            }
+            break
+        if chosen:
+            break
+
+    if not chosen:
+        await update.message.reply_text(
+            "✅ No new posts available right now.\n"
+            "Check back later or add more accounts with /add"
+        )
+        return
 
     # Generate AI reply suggestion
-    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
-    reply_suggestion = await generate_raid_reply(raid["tweet_content"], raid["account_username"])
+    reply_suggestion = await generate_raid_reply(chosen["text"], chosen["username"])
 
-    # Build pre-filled X reply link
     prefilled_url = (
         f"https://x.com/intent/tweet"
-        f"?in_reply_to={raid['tweet_id']}"
+        f"?in_reply_to={chosen['tweet_id']}"
         f"&text={quote(reply_suggestion)}"
     )
-    time_ago = _time_ago(raid["created_at"])
+    time_ago = _time_ago(chosen["created_at"])
 
     await update.message.reply_text(
-        f"🎯 raid — reply to @{raid['account_username']} ({raid['followers_count']} followers):\n"
-        f"{raid['tweet_content']}\n\n"
-        f"{raid['tweet_url']}\n"
+        f"🎯 raid — reply to @{chosen['username']} ({chosen['followers']} followers):\n"
+        f"{chosen['text']}\n\n"
+        f"{chosen['url']}\n"
         f"🕒 {time_ago}\n\n"
         f"💬 genuine reply (no pitch — just add value; the points come later):\n"
         f"<i>{reply_suggestion}</i>\n"
@@ -318,19 +387,24 @@ async def cmd_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text("Please provide a valid URL to your X reply.")
         return
 
-    # Find the most recent active raid the user hasn't completed yet
-    raid = db.get_available_raid(user.id)
-    if not raid:
+    pending = db.get_pending_tweet(user.id)
+    if not pending:
         await update.message.reply_text(
-            "⚠️ No open raid found for you. You may have already completed all active raids.\n"
-            "Use /find to check for new ones!"
+            "⚠️ No open raid found for you.\n"
+            "Use /find to get a new one first!"
         )
         return
 
-    success = db.complete_raid(raid["id"], user.id, reply_url, POINTS_RAID)
+    success = db.complete_tweet(
+        tweet_id=pending["tweet_id"],
+        telegram_id=user.id,
+        reply_url=reply_url,
+        points=POINTS_RAID,
+    )
+
     if not success:
         await update.message.reply_text(
-            "⚠️ Looks like you already submitted this raid. Use /find for the next one!"
+            "⚠️ Looks like you already submitted this one. Use /find for the next."
         )
         return
 
@@ -358,9 +432,9 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/start — Register and join the community\n"
         "/linkx &lt;username&gt; — Link your X (Twitter) account\n"
         "/task &lt;description&gt; — Log a completed task\n"
-        "/find — Get the current raid target + AI reply suggestion\n"
-        "/done &lt;reply_url&gt; — Submit your raid reply to earn points\n"
-        "/addraid &lt;url&gt; @account &lt;followers&gt; &lt;content&gt; — Add a raid target\n"
+        "/add &lt;username or link&gt; — Start tracking an X account\n"
+        "/find — Get the latest post from tracked accounts + AI reply\n"
+        "/done &lt;reply_url&gt; — Submit your reply to earn points\n"
         "/points — Check your points and recent tasks\n"
         "/leaderboard — See the top members\n"
         "/help — Show this message"
