@@ -1,7 +1,7 @@
 """Optional Grok AI replies via xAI's OpenAI-compatible API."""
 from __future__ import annotations
 
-from bot.config import GROK_API_KEY, GROK_BASE_URL, GROK_ENABLED, GROK_MODEL
+from config import GROK_API_KEY, GROK_BASE_URL, GROK_ENABLED, GROK_MODEL
 
 _client = None
 
