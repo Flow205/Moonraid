@@ -9,9 +9,9 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import quote
 
-from bot import database as db
-from bot.database import get_recent_posts, set_last_raid_id
-from bot.config import (
+import database as db
+from database import get_recent_posts, set_last_raid_id
+from config import (
     GROK_ENABLED,
     LEADERBOARD_SIZE,
     POINTS_LINK_X,
@@ -19,7 +19,7 @@ from bot.config import (
     POINTS_REGISTER,
     POINTS_TASK,
 )
-from bot.grok import ask_grok, generate_raid_reply
+from grok import ask_grok, generate_raid_reply
 
 
 def _time_ago(created_at_str: str) -> str:
@@ -361,44 +361,26 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/find — Get the current raid target + AI reply suggestion\n"
         "/done &lt;reply_url&gt; — Submit your raid reply to earn points\n"
         "/addraid &lt;url&gt; @account &lt;followers&gt; &lt;content&gt; — Add a raid target\n"
-        "/points — View your points and recent tasks\n"
+        "/points — Check your points and recent tasks\n"
         "/leaderboard — See the top members\n"
         "/help — Show this message"
-        + ai_note,
+        f"{ai_note}",
         parse_mode=ParseMode.HTML,
     )
 
 
 # ---------------------------------------------------------------------------
-# Normal messages → Grok AI
+# Message handler (AI chat)
 # ---------------------------------------------------------------------------
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not GROK_ENABLED:
+    if not update.message or not update.message.text:
         return
-    if update.message is None or not update.message.text:
-        return
-
-    # In groups, only reply when the bot is mentioned or the message is a reply to the bot
-    if update.effective_chat.type != "private":
-        bot_username = context.bot.username
-        text = update.message.text
-        mentioned = bot_username and f"@{bot_username}" in text
-        is_reply_to_bot = (
-            update.message.reply_to_message
-            and update.message.reply_to_message.from_user
-            and update.message.reply_to_message.from_user.id == context.bot.id
-        )
-        if not mentioned and not is_reply_to_bot:
-            return
 
     user = update.effective_user
-    name = user.first_name if user else "user"
-    text = update.message.text
+    if user is None:
+        return
 
-    await context.bot.send_chat_action(
-        chat_id=update.effective_chat.id, action="typing"
-    )
-    reply = await ask_grok(text, name)
+    reply = await ask_grok(update.message.text, user.first_name or "user")
     if reply:
         await update.message.reply_text(reply)
