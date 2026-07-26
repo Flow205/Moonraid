@@ -54,7 +54,7 @@ def main() -> None:
 
     # Catch-all for normal messages → Grok AI
     app.add_handler(
-        MessageHandler(filters.TEXT & \~filters.COMMAND, handle_message)
+        MessageHandler(filters.TEXT & filters.COMMAND.__invert__(), handle_message)
     )
 
     logger.info("Bot is running. Press Ctrl+C to stop.")
