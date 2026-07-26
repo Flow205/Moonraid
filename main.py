@@ -11,7 +11,7 @@ from telegram.ext import (
 from config import TELEGRAM_BOT_TOKEN
 from database import init_db
 from handlers import (
-    cmd_addraid,
+    cmd_add,
     cmd_done,
     cmd_find,
     cmd_help,
@@ -22,6 +22,7 @@ from handlers import (
     cmd_task,
     handle_message,
 )
+
 logging.basicConfig(
     format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
     level=logging.INFO,
@@ -46,14 +47,14 @@ def main() -> None:
     app.add_handler(CommandHandler("task", cmd_task))
     app.add_handler(CommandHandler(["points", "mypoints"], cmd_points))
     app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
-    app.add_handler(CommandHandler("addraid", cmd_addraid))
+    app.add_handler(CommandHandler("add", cmd_add))          # ← new
     app.add_handler(CommandHandler("find", cmd_find))
     app.add_handler(CommandHandler("done", cmd_done))
     app.add_handler(CommandHandler("help", cmd_help))
 
     # Catch-all for normal messages → Grok AI
     app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
+        MessageHandler(filters.TEXT & \~filters.COMMAND, handle_message)
     )
 
     logger.info("Bot is running. Press Ctrl+C to stop.")
